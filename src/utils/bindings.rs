@@ -28,7 +28,7 @@ pub fn bindings_init<'s>(scope: &mut v8::HandleScope<'s, ()>) -> v8::Local<'s, v
     let scope = &mut v8::ContextScope::new(scope, context);
     set_func(scope, global, "syscall_v8", syscall_v8);
     set_func(scope, global, "syscall_json", syscall_json);
-    set_func(scope, global, "syscall_native", syscall_native);
+    set_func(scope, global, "syscall_void", syscall_void);
     set_func(scope, global, "core_encode", encode);
     set_func(scope, global, "core_decode", decode);
     scope.escape(context)
@@ -55,7 +55,7 @@ fn syscall_v8<'s>(
 
 // A syscall system with no args or encoding
 // to measure the baseline and upper-limit
-fn syscall_native<'s>(
+fn syscall_void<'s>(
     scope: &mut v8::HandleScope<'s>,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue,

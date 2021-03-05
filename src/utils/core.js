@@ -21,8 +21,8 @@ function with_json(id, args) {
     return null;
 }
 
-function with_native(id, args) {
-    return syscall_native(id, args);
+function with_void(id, args) {
+    return syscall_void(id, args);
 }
 
 function sum(fn, nums) {
