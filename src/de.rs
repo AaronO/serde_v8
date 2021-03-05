@@ -247,10 +247,11 @@ impl<'de, 'a, 'b, 's, 'x> de::Deserializer<'de> for &'x mut Deserializer<'a, 'b,
     where
         V: Visitor<'de>,
     {
-        let obj = v8::Local::<v8::Object>::try_from(self.input);
+        let obj = v8::Local::<v8::Object>::try_from(self.input).unwrap();
         let map = ObjectAccess {
             fields: fields,
-            obj: obj.unwrap(),
+            obj: obj,
+            pos: 0,
             scope: self.scope,
             _cache: None,
         };
@@ -293,6 +294,7 @@ struct ObjectAccess<'a, 'b, 's> {
     obj: v8::Local<'a, v8::Object>,
     scope: &'b mut v8::HandleScope<'s>,
     fields: &'static [&'static str],
+    pos: usize,
     _cache: Option<&'b mut KeyCache>,
 }
 
@@ -300,33 +302,23 @@ fn str_deserializer(s: &str) -> de::value::StrDeserializer<Error> {
     de::IntoDeserializer::into_deserializer(s)
 }
 
-// TODO: figure lifetimes out
-// optimize rust -> v8 keys by using a KeyCache
-// impl ObjectAccess<'_, '_, '_> {
-//     fn get_key(&mut self, field: &'static str) -> v8::Local<'_, v8::Value> {
-//         v8::String::new(self.scope, field).unwrap().into()
-//     }
-
-//     fn get_value(&mut self, field: &'static str) -> v8::Local<'_, v8::Value> {
-//         let key = v8::String::new(self.scope, field).unwrap().into();
-//         self.obj.get(self.scope, key).unwrap()
-//     }
-// }
-
 impl<'de, 'a, 'b, 's> de::MapAccess<'de> for ObjectAccess<'a, 'b, 's> {
     type Error = Error;
 
     fn next_key_seed<K: de::DeserializeSeed<'de>>(&mut self, seed: K) -> Result<Option<K::Value>> {
-        Ok(match self.fields.get(0) {
+        Ok(match self.fields.get(self.pos) {
             Some(&field) => Some(seed.deserialize(str_deserializer(field))?),
             None => None,
         })
     }
 
     fn next_value_seed<V: de::DeserializeSeed<'de>>(&mut self, seed: V) -> Result<V::Value> {
-        let (field, fields) = self.fields.split_first().unwrap();
-        self.fields = fields;
-        let key = v8::String::new(self.scope, field).unwrap().into();
+        if self.pos >= self.fields.len() {
+            return Err(Error::LengthMismatch)
+        }
+        let field = self.fields[self.pos];
+        self.pos += 1;
+        let key = v8_struct_key(self.scope, field).into();
         let v8_val = self.obj.get(self.scope, key).unwrap();
         let mut deserializer = Deserializer::new(self.scope, v8_val, None);
         seed.deserialize(&mut deserializer)
@@ -337,19 +329,30 @@ impl<'de, 'a, 'b, 's> de::MapAccess<'de> for ObjectAccess<'a, 'b, 's> {
         kseed: K,
         vseed: V,
     ) -> Result<Option<(K::Value, V::Value)>> {
-        Ok(match self.fields.split_first() {
-            Some((&field, fields)) => {
-                self.fields = fields;
-                Some((kseed.deserialize(str_deserializer(field))?, {
-                    let key = v8::String::new(self.scope, field).unwrap().into();
-                    let v8_val = self.obj.get(self.scope, key).unwrap();
-                    let mut deserializer = Deserializer::new(self.scope, v8_val, None);
-                    vseed.deserialize(&mut deserializer)?
-                }))
-            }
-            None => None,
-        })
+        if self.pos >= self.fields.len() {
+            return Ok(None)
+        }
+        let field = self.fields[self.pos];
+        self.pos += 1;
+        Ok(
+            Some((kseed.deserialize(str_deserializer(field))?, {
+                let key = v8_struct_key(self.scope, field).into();
+                let v8_val = self.obj.get(self.scope, key).unwrap();
+                let mut deserializer = Deserializer::new(self.scope, v8_val, None);
+                vseed.deserialize(&mut deserializer)?
+            }))
+        )
     }
+}
+
+// creates an optimized v8::String for a struct field
+// TODO: experiment with external strings
+// TODO: evaluate if own KeyCache is better than v8's dedupe
+fn v8_struct_key<'s>(scope: &mut v8::HandleScope<'s>, field: &'static str) -> v8::Local<'s, v8::String> {
+    // Internalized v8 strings are significantly faster than "normal" v8 strings
+    // since v8 deduplicates re-used strings minimizing new allocations
+    // see: https://github.com/v8/v8/blob/14ac92e02cc3db38131a57e75e2392529f405f2f/include/v8.h#L3165-L3171
+    v8::String::new_from_utf8(scope, field.as_ref(), v8::NewStringType::Internalized).unwrap().into()
 }
 
 struct SeqAccess<'a, 'b, 's> {
