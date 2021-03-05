@@ -8,8 +8,8 @@ pub fn sum(args: Vec<u64>) -> u64 {
 
 #[derive(Deserialize)]
 pub struct AddArgs {
-    a: u32,
-    b: u32,
+    pub a: u32,
+    pub b: u32,
 }
 pub fn add(args: AddArgs) -> u32 {
     args.a + args.b
@@ -17,9 +17,9 @@ pub fn add(args: AddArgs) -> u32 {
 
 #[derive(Deserialize, Serialize)]
 pub struct Person {
-    first_name: String,
-    last_name: String,
-    age: u8,
+    pub first_name: String,
+    pub last_name: String,
+    pub age: u8,
 }
 pub fn promote(args: Person) -> Person {
     Person {

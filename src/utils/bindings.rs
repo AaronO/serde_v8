@@ -28,6 +28,7 @@ pub fn bindings_init<'s>(scope: &mut v8::HandleScope<'s, ()>) -> v8::Local<'s, v
     let scope = &mut v8::ContextScope::new(scope, context);
     set_func(scope, global, "syscall_v8", syscall_v8);
     set_func(scope, global, "syscall_json", syscall_json);
+    set_func(scope, global, "syscall_native", syscall_native);
     set_func(scope, global, "core_encode", encode);
     set_func(scope, global, "core_decode", decode);
     scope.escape(context)
@@ -48,6 +49,27 @@ fn syscall_v8<'s>(
         ops::add(from_v8(scope, arg).unwrap());
     } else if id == 3 {
         ops::promote(from_v8(scope, arg).unwrap());
+    }
+    rv.set(v8::null(scope).into());
+}
+
+// A syscall system with no args or encoding
+// to measure the baseline and upper-limit
+fn syscall_native<'s>(
+    scope: &mut v8::HandleScope<'s>,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue,
+) {
+    let id: u32 = from_v8(scope, args.get(0)).unwrap();
+    let _arg = args.get(1);
+    // Call ops
+    // TODO: serialize return values
+    if id == 1 {
+        ops::sum(vec![1,2,3,4,5]);
+    } else if id == 2 {
+        ops::add(ops::AddArgs{a: 123, b: 321});
+    } else if id == 3 {
+        ops::promote(ops::Person{first_name: "Bill".to_owned(), last_name: "Gates".to_owned(), age: 60 });
     }
     rv.set(v8::null(scope).into());
 }

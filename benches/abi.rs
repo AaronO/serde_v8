@@ -39,6 +39,11 @@ fn abi_add_json(b: &mut Bencher) {
 }
 
 #[bench]
+fn abi_add_native(b: &mut Bencher) {
+    bench_js_loop(b, 100, "add(with_native, 123, 321)");
+}
+
+#[bench]
 fn abi_promote_v8(b: &mut Bencher) {
     bench_js_loop(b, 100, "promote(with_v8, 'Aaron', 'O Mullan', 27)");
 }
