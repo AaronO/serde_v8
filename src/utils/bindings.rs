@@ -1,4 +1,5 @@
 use crate::de::from_v8;
+use crate::ser::to_v8;
 use rusty_v8 as v8;
 
 use std::cell::Cell;
@@ -41,16 +42,21 @@ fn syscall_v8<'s>(
 ) {
     let id: u32 = from_v8(scope, args.get(0)).unwrap();
     let arg = args.get(1);
+    
     // Call ops
-    // TODO: serialize return values
-    if id == 1 {
-        ops::sum(from_v8(scope, arg).unwrap());
+    let v = if id == 1 {
+        let t = ops::sum(from_v8(scope, arg).unwrap());
+        to_v8(scope, t)
     } else if id == 2 {
-        ops::add(from_v8(scope, arg).unwrap());
+        let t = ops::add(from_v8(scope, arg).unwrap());
+        to_v8(scope, t)
     } else if id == 3 {
-        ops::promote(from_v8(scope, arg).unwrap());
-    }
-    rv.set(v8::null(scope).into());
+        let t = ops::promote(from_v8(scope, arg).unwrap());
+        to_v8(scope, t)
+    } else {
+        Ok(v8::null(scope).into())
+    };
+    rv.set(v.unwrap());
 }
 
 // A syscall system with no args or encoding
@@ -62,8 +68,8 @@ fn syscall_void<'s>(
 ) {
     let id: u32 = from_v8(scope, args.get(0)).unwrap();
     let _arg = args.get(1);
+
     // Call ops
-    // TODO: serialize return values
     if id == 1 {
         ops::sum(vec![1,2,3,4,5]);
     } else if id == 2 {
@@ -90,34 +96,24 @@ fn syscall_json<'s>(
         .ok()
         .unwrap();
 
-    // TODO: serialzie return values once serde_v8 can do it
-    if id == 1 {
-        ops::sum(serde_json::from_slice(&argbuf).unwrap());
-    } else if id == 2 {
-        ops::add(serde_json::from_slice(&argbuf).unwrap());
-    } else if id == 3 {
-        ops::promote(serde_json::from_slice(&argbuf).unwrap());
-    }
-    rv.set(v8::null(scope).into());
-
-    // let retbuf = {
-    //     if id == 1 {
-    //         serde_json::to_vec(
-    //             &ops::sum(serde_json::from_slice(&argbuf).unwrap())
-    //         )
-    //     } else if id == 2 {
-    //         serde_json::to_vec(
-    //             &ops::add(serde_json::from_slice(&argbuf).unwrap())
-    //         )
-    //     } else if id == 3 {
-    //         serde_json::to_vec(
-    //             &ops::promote(serde_json::from_slice(&argbuf).unwrap())
-    //         )
-    //     } else {
-    //         serde_json::to_vec(&())
-    //     }
-    // }.map(Into::into).unwrap();
-    // rv.set(boxed_slice_to_uint8array(scope, retbuf).into());
+    let retbuf = {
+        if id == 1 {
+            serde_json::to_vec(
+                &ops::sum(serde_json::from_slice(&argbuf).unwrap())
+            )
+        } else if id == 2 {
+            serde_json::to_vec(
+                &ops::add(serde_json::from_slice(&argbuf).unwrap())
+            )
+        } else if id == 3 {
+            serde_json::to_vec(
+                &ops::promote(serde_json::from_slice(&argbuf).unwrap())
+            )
+        } else {
+            serde_json::to_vec(&())
+        }
+    }.map(Into::into).unwrap();
+    rv.set(boxed_slice_to_uint8array(scope, retbuf).into());
 }
 
 pub fn boxed_slice_to_uint8array<'sc>(

@@ -17,8 +17,8 @@ function with_json(id, args) {
     const v = syscall_json(id, buf);
     // TODO: re-enable once v8 is serializing returns
     // so they're on equal footing
-    // return decodeJson(v);
-    return null;
+    return decodeJson(v);
+    // return null;
 }
 
 function with_void(id, args) {
