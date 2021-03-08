@@ -16,12 +16,8 @@ type ScopePtr<'a, 'b> = Rc<RefCell<v8::EscapableHandleScope<'a, 'b>>>;
 pub fn to_v8<'a, 'b, T>(scope: &mut v8::HandleScope<'a>, input: T) -> JsResult<'a>
 where
     T: Serialize,
-{
-    // Yet another hack to workaround scope's lifetimes ...
-    let m: u64 = unsafe { std::mem::transmute(scope) };
-    let scope2: &mut v8::HandleScope = unsafe { std::mem::transmute(m) };
-    
-    let subscope = v8::EscapableHandleScope::new(scope2);
+{   
+    let subscope = v8::EscapableHandleScope::new(scope);
     let scopeptr = Rc::new(RefCell::new(subscope));
     let serializer = Serializer::new(scopeptr.clone());
     let x = input.serialize(serializer)?;
@@ -543,10 +539,7 @@ impl<'a, 'b> ser::Serializer for MagicTransmuter<'a, 'b> {
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
-        // TODO: serialize Maps (HashMap or BTreeMap) to v8 objects,
-        // ideally JS Maps since they're lighter and better suited for K/V data
-        // only allow certain keys (e.g: strings and numbers)
-        unimplemented!()
+        unreachable!();
     }
 
     /// Serialises Rust typed structs into plain JS objects.
