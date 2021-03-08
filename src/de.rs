@@ -8,6 +8,8 @@ use std::convert::TryFrom;
 use crate::error::{Error, Result};
 use crate::payload::ValueType;
 
+use crate::magic;
+
 pub struct Deserializer<'a, 'b, 's> {
     input: v8::Local<'a, v8::Value>,
     scope: &'b mut v8::HandleScope<'s>,
@@ -240,13 +242,22 @@ impl<'de, 'a, 'b, 's, 'x> de::Deserializer<'de> for &'x mut Deserializer<'a, 'b,
 
     fn deserialize_struct<V>(
         self,
-        _name: &'static str,
+        name: &'static str,
         fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value>
     where
         V: Visitor<'de>,
     {
+        // Magic for serde_v8::magic::Value, to passthrough v8::Value
+        // TODO: ensure this is cross-platform and there's no alternative
+        if name == magic::NAME {
+            let mv = magic::Value { v8_value: self.input };
+            let hack: u64 = unsafe { std::mem::transmute(mv) };
+            return visitor.visit_u64(hack);
+        }
+        
+        // Regular struct
         let obj = v8::Local::<v8::Object>::try_from(self.input).unwrap();
         let map = ObjectAccess {
             fields: fields,

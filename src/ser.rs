@@ -6,33 +6,41 @@ use std::rc::Rc;
 use std::cell::{RefCell};
 
 use crate::error::{Error, Result};
+use crate::magic;
 
 type JsValue<'s> = v8::Local<'s, v8::Value>;
 type JsResult<'s> = Result<JsValue<'s>>;
 
-type ScopePtr<'s> = Rc<RefCell<v8::HandleScope<'s>>>;
+type ScopePtr<'a, 'b> = Rc<RefCell<v8::EscapableHandleScope<'a, 'b>>>;
 
-pub fn to_v8<'a, 'b, T>(scope: &'a mut v8::HandleScope<'b>, input: T) -> JsResult<'a>
+pub fn to_v8<'a, 'b, T>(scope: &mut v8::HandleScope<'a>, input: T) -> JsResult<'a>
 where
     T: Serialize,
 {
-    let subscope = v8::HandleScope::new(scope);
+    // Yet another hack to workaround scope's lifetimes ...
+    let m: u64 = unsafe { std::mem::transmute(scope) };
+    let scope2: &mut v8::HandleScope = unsafe { std::mem::transmute(m) };
+    
+    let subscope = v8::EscapableHandleScope::new(scope2);
     let scopeptr = Rc::new(RefCell::new(subscope));
-    let serializer = Serializer::new(scopeptr);
-    let x = input.serialize(serializer);
-    x
+    let serializer = Serializer::new(scopeptr.clone());
+    let x = input.serialize(serializer)?;
+    let x = scopeptr.clone().borrow_mut().escape(x);
+    
+    Ok(x)
+    
 }
 
 /// Wraps other serializers into an enum tagged variant form.
 /// Uses {"Variant": ...payload...} for compatibility with serde-json.
-pub struct VariantSerializer<'a, S> {
+pub struct VariantSerializer<'a, 'b, S> {
     variant: &'static str,
     inner: S,
-    scope: ScopePtr<'a>,
+    scope: ScopePtr<'a, 'b>,
 }
 
-impl<'a, S> VariantSerializer<'a, S> {
-    pub fn new(scope: ScopePtr<'a>, variant: &'static str, inner: S) -> Self {
+impl<'a, 'b, S> VariantSerializer<'a, 'b, S> {
+    pub fn new(scope: ScopePtr<'a, 'b>, variant: &'static str, inner: S) -> Self {
         Self { scope, variant, inner }
     }
 
@@ -46,7 +54,7 @@ impl<'a, S> VariantSerializer<'a, S> {
     }
 }
 
-impl<'a, S> ser::SerializeTupleVariant for VariantSerializer<'a, S>
+impl<'a, 'b, S> ser::SerializeTupleVariant for VariantSerializer<'a, 'b, S>
 where S: ser::SerializeTupleStruct<Ok = JsValue<'a>, Error = Error> 
 {
     type Ok = JsValue<'a>;
@@ -61,7 +69,7 @@ where S: ser::SerializeTupleStruct<Ok = JsValue<'a>, Error = Error>
     }
 }
 
-impl<'a, S> ser::SerializeStructVariant for VariantSerializer<'a, S>
+impl<'a, 'b, S> ser::SerializeStructVariant for VariantSerializer<'a, 'b, S>
 where S: ser::SerializeStruct<Ok = JsValue<'a>, Error = Error>
 {
     type Ok = JsValue<'a>;
@@ -80,14 +88,14 @@ where S: ser::SerializeStruct<Ok = JsValue<'a>, Error = Error>
     }
 }
 
-pub struct ArraySerializer<'a> {
-    // serializer: Serializer<'a>,
+pub struct ArraySerializer<'a, 'b> {
+    // serializer: Serializer<'a, 'b>,
     pending: Vec<JsValue<'a>>,
-    scope: ScopePtr<'a>,
+    scope: ScopePtr<'a, 'b>,
 }
 
-impl<'a> ArraySerializer<'a> {
-    pub fn new(scope: ScopePtr<'a>) -> Self {
+impl<'a, 'b> ArraySerializer<'a, 'b> {
+    pub fn new(scope: ScopePtr<'a, 'b>) -> Self {
         // let serializer = Serializer::new(scope);
         Self {
             scope,
@@ -97,7 +105,7 @@ impl<'a> ArraySerializer<'a> {
     }
 }
 
-impl<'a> ser::SerializeSeq for ArraySerializer<'a> {
+impl<'a, 'b> ser::SerializeSeq for ArraySerializer<'a, 'b> {
     type Ok = JsValue<'a>;
     type Error = Error;
 
@@ -115,7 +123,7 @@ impl<'a> ser::SerializeSeq for ArraySerializer<'a> {
     }
 }
 
-impl<'a> ser::SerializeTuple for ArraySerializer<'a> {
+impl<'a, 'b> ser::SerializeTuple for ArraySerializer<'a, 'b> {
     type Ok = JsValue<'a>;
     type Error = Error;
 
@@ -128,7 +136,7 @@ impl<'a> ser::SerializeTuple for ArraySerializer<'a> {
     }
 }
 
-impl<'a> ser::SerializeTupleStruct for ArraySerializer<'a> {
+impl<'a, 'b> ser::SerializeTupleStruct for ArraySerializer<'a, 'b> {
     type Ok = JsValue<'a>;
     type Error = Error;
 
@@ -141,13 +149,13 @@ impl<'a> ser::SerializeTupleStruct for ArraySerializer<'a> {
     }
 }
 
-pub struct ObjectSerializer<'a> {
-    scope: ScopePtr<'a>,
+pub struct ObjectSerializer<'a, 'b> {
+    scope: ScopePtr<'a, 'b>,
     obj: v8::Local<'a, v8::Object>,
 }
 
-impl<'a> ObjectSerializer<'a> {
-    pub fn new(scope: ScopePtr<'a>) -> Self {
+impl<'a, 'b> ObjectSerializer<'a, 'b> {
+    pub fn new(scope: ScopePtr<'a, 'b>) -> Self {
         let obj = v8::Object::new(&mut *scope.borrow_mut());
         Self {
             scope,
@@ -156,7 +164,7 @@ impl<'a> ObjectSerializer<'a> {
     }
 }
 
-impl<'a> ser::SerializeStruct for ObjectSerializer<'a> {
+impl<'a, 'b> ser::SerializeStruct for ObjectSerializer<'a, 'b> {
     type Ok = JsValue<'a>;
     type Error = Error;
 
@@ -177,13 +185,69 @@ impl<'a> ser::SerializeStruct for ObjectSerializer<'a> {
     }
 }
 
-#[derive(Clone)]
-pub struct Serializer<'a> {
-    scope: ScopePtr<'a>,
+pub struct MagicSerializer<'a, 'b> {
+    scope: ScopePtr<'a, 'b>,
+    v8_value: Option<v8::Local<'a, v8::Value>>,
 }
 
-impl<'a> Serializer<'a> {
-    pub fn new(scope: ScopePtr<'a>) -> Self {
+impl<'a, 'b> ser::SerializeStruct for MagicSerializer<'a, 'b> {
+    type Ok = JsValue<'a>;
+    type Error = Error;
+
+    fn serialize_field<T: ?Sized + Serialize>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<()> {
+        if key != magic::FIELD {
+            unreachable!();
+        }
+        let v8_value = value.serialize(MagicTransmuter{ _scope: self.scope.clone() })?;
+        self.v8_value = Some(v8_value);
+        Ok(())
+    }
+
+    fn end(self) -> JsResult<'a> {
+        Ok(self.v8_value.unwrap())
+    }
+}
+
+// Dispatches between magic and regular struct serializers
+pub enum StructSerializers<'a, 'b> {
+    Magic(MagicSerializer<'a, 'b>),
+    Regular(ObjectSerializer<'a, 'b>)
+}
+
+impl<'a, 'b> ser::SerializeStruct for StructSerializers<'a, 'b> {
+    type Ok = JsValue<'a>;
+    type Error = Error;
+
+    fn serialize_field<T: ?Sized + Serialize>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<()> {
+        match self {
+            StructSerializers::Magic(s) => s.serialize_field(key, value),
+            StructSerializers::Regular(s) => s.serialize_field(key, value),
+        }
+    }
+
+    fn end(self) -> JsResult<'a> {
+        match self {
+            StructSerializers::Magic(s) => s.end(),
+            StructSerializers::Regular(s) => s.end(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Serializer<'a, 'b> {
+    scope: ScopePtr<'a, 'b>,
+}
+
+impl<'a, 'b> Serializer<'a, 'b> {
+    pub fn new(scope: ScopePtr<'a, 'b>) -> Self {
         Serializer { scope }
     }
 }
@@ -196,17 +260,17 @@ macro_rules! forward_to {
     };
 }
 
-impl<'a> ser::Serializer for Serializer<'a> {
+impl<'a, 'b> ser::Serializer for Serializer<'a, 'b> {
     type Ok = v8::Local<'a, v8::Value>;
     type Error = Error;
 
-    type SerializeSeq = ArraySerializer<'a>;
-    type SerializeTuple = ArraySerializer<'a>;
-    type SerializeTupleStruct = ArraySerializer<'a>;
-    type SerializeTupleVariant = VariantSerializer<'a, ArraySerializer<'a>>;
+    type SerializeSeq = ArraySerializer<'a, 'b>;
+    type SerializeTuple = ArraySerializer<'a, 'b>;
+    type SerializeTupleStruct = ArraySerializer<'a, 'b>;
+    type SerializeTupleVariant = VariantSerializer<'a, 'b, ArraySerializer<'a, 'b>>;
     type SerializeMap = Impossible<v8::Local<'a, v8::Value>, Error>;
-    type SerializeStruct = ObjectSerializer<'a>;
-    type SerializeStructVariant = VariantSerializer<'a, ObjectSerializer<'a>>;
+    type SerializeStruct = StructSerializers<'a, 'b>;
+    type SerializeStructVariant = VariantSerializer<'a, 'b, StructSerializers<'a, 'b>>;
 
     forward_to! {
         serialize_i8(i8, serialize_i32, 'a);
@@ -334,8 +398,13 @@ impl<'a> ser::Serializer for Serializer<'a> {
     }
 
     /// Serialises Rust typed structs into plain JS objects.
-    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
-        Ok(ObjectSerializer::new(self.scope))
+    fn serialize_struct(self, name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
+        if name == magic::NAME {
+            let m = MagicSerializer { scope: self.scope, v8_value: None };
+            return Ok(StructSerializers::Magic(m));
+        }
+        let o = ObjectSerializer::new(self.scope);
+        Ok(StructSerializers::Regular(o))
     }
 
     fn serialize_struct_variant(
@@ -352,6 +421,147 @@ impl<'a> ser::Serializer for Serializer<'a> {
             variant,
             x,
         ))
+    }
+}
+
+macro_rules! not_reachable {
+    ($($name:ident($ty:ty, $lt:lifetime);)*) => {
+        $(fn $name(self, _v: $ty) -> JsResult<$lt> {
+            unreachable!();
+        })*
+    };
+}
+
+/// A VERY hackish serde::Serializer
+/// that exists solely to transmute a u64 to a serde_v8::Value
+struct MagicTransmuter<'a, 'b>{
+    _scope: ScopePtr<'a, 'b>,
+}
+
+impl<'a, 'b> ser::Serializer for MagicTransmuter<'a, 'b> {
+    type Ok = v8::Local<'a, v8::Value>;
+    type Error = Error;
+
+    type SerializeSeq = Impossible<v8::Local<'a, v8::Value>, Error>;
+    type SerializeTuple = Impossible<v8::Local<'a, v8::Value>, Error>;
+    type SerializeTupleStruct = Impossible<v8::Local<'a, v8::Value>, Error>;
+    type SerializeTupleVariant = Impossible<v8::Local<'a, v8::Value>, Error>;
+    type SerializeMap = Impossible<v8::Local<'a, v8::Value>, Error>;
+    type SerializeStruct = Impossible<v8::Local<'a, v8::Value>, Error>;
+    type SerializeStructVariant = Impossible<v8::Local<'a, v8::Value>, Error>;
+    
+    // The only serialize method for this hackish struct
+    fn serialize_u64(self, v: u64) -> JsResult<'a> {
+        let mv: magic::Value = unsafe { std::mem::transmute(v) };
+        Ok(mv.v8_value)
+    }
+
+    not_reachable! {
+        serialize_i8(i8, 'a);
+        serialize_i16(i16, 'a);
+        serialize_i32(i32, 'a);
+        serialize_i64(i64, 'a);
+        serialize_u8(u8, 'a);
+        serialize_u16(u16, 'a);
+        serialize_u32(u32, 'a);
+        // serialize_u64(u64, 'a); the chosen one
+        serialize_f32(f32, 'a);
+        serialize_f64(f64, 'a);
+        serialize_bool(bool, 'a);
+        serialize_char(char, 'a);
+        serialize_str(&str, 'a);
+        serialize_bytes(&[u8], 'a);
+    }
+
+    fn serialize_none(self) -> JsResult<'a> {
+        unreachable!();
+    }
+
+    fn serialize_some<T: ?Sized + Serialize>(self, _value: &T) -> JsResult<'a> {
+        unreachable!();
+    }
+
+    fn serialize_unit(self) -> JsResult<'a> {
+        unreachable!();
+    }
+
+    fn serialize_unit_struct(self, _name: &'static str) -> JsResult<'a> {
+        unreachable!();
+    }
+
+    /// For compatibility with serde-json, serialises unit variants as "Variant" strings.
+    fn serialize_unit_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+    ) -> JsResult<'a> {
+        unreachable!();
+    }
+
+    fn serialize_newtype_struct<T: ?Sized + Serialize>(
+        self,
+        _name: &'static str,
+        _value: &T,
+    ) -> JsResult<'a> {
+        unreachable!();
+    }
+
+    fn serialize_newtype_variant<T: ?Sized + Serialize>(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+        _value: &T,
+    ) -> JsResult<'a> {
+        unreachable!();
+    }
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
+        unreachable!();
+    }
+
+    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple> {
+        unreachable!();
+    }
+
+    fn serialize_tuple_struct(
+        self,
+        _name: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeTupleStruct> {
+        unreachable!();
+    }
+
+    fn serialize_tuple_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeTupleVariant> {
+        unreachable!();
+    }
+
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
+        // TODO: serialize Maps (HashMap or BTreeMap) to v8 objects,
+        // ideally JS Maps since they're lighter and better suited for K/V data
+        // only allow certain keys (e.g: strings and numbers)
+        unimplemented!()
+    }
+
+    /// Serialises Rust typed structs into plain JS objects.
+    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
+        unreachable!();
+    }
+
+    fn serialize_struct_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeStructVariant> {
+        unreachable!();
     }
 }
 
