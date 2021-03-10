@@ -140,11 +140,7 @@ impl<'de, 'a, 'b, 's, 'x> de::Deserializer<'de> for &'x mut Deserializer<'a, 'b,
         V: Visitor<'de>,
     {
         if self.input.is_string() {
-            let string = self
-                .input
-                .to_string(self.scope)
-                .unwrap()
-                .to_rust_string_lossy(self.scope);
+            let string = self.input.to_rust_string_lossy(self.scope);
             visitor.visit_string(string)
         } else {
             Err(Error::ExpectedString)
