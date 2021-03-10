@@ -25,7 +25,7 @@ impl ValueType {
             return Self::Array;
         } else if v.is_object() {
             return Self::Object;
-        } else if v.is_null() || v.is_undefined() {
+        } else if v.is_null_or_undefined() {
             return Self::Null;
         }
         panic!("serde_v8: unknown ValueType for v8::Value")
